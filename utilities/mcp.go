@@ -3,6 +3,7 @@ package utilities
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"veronica/structs"
 )
 
 type PathConfig struct {
@@ -173,6 +175,13 @@ func connectServer(ctx context.Context, serverPath string) (*mcp.ClientSession, 
 		if err == nil {
 			return session, nil
 		}
+
+		// A 404 on initialize surfaces as ErrSessionMissing in the SDK;
+		// the endpoint simply doesn't exist on the server.
+		if errors.Is(streamableErr, mcp.ErrSessionMissing) &&
+			strings.Contains(err.Error(), "Not Found") {
+			return nil, fmt.Errorf("endpoint not found (HTTP 404) at %s — check the server's MCP path and port", serverPath)
+		}
 		return nil, fmt.Errorf("streamable HTTP: %v; SSE fallback: %v", streamableErr, err)
 	}
 
@@ -201,13 +210,40 @@ func (m *MCPManager) GetTools() []mcp.Tool {
 	return all
 }
 
+// GetOpenAITools returns the tools of all connected servers in the OpenAI
+// function-calling format expected by /v1/chat/completions.
+func (m *MCPManager) GetOpenAITools() []structs.Tool {
+	tools := m.GetTools()
+	out := make([]structs.Tool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, structs.Tool{
+			Type: "function",
+			Function: struct {
+				Name        string `json:"name"`
+				Description string `json:"description,omitempty"`
+				Parameters  any    `json:"parameters"`
+			}{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			},
+		})
+	}
+	return out
+}
+
 func (m *MCPManager) ExecuteTool(name string, args map[string]any) (string, error) {
+	return m.ExecuteToolCtx(context.Background(), name, args)
+}
+
+// ExecuteToolCtx runs a tool with the caller's context so the harness can
+// enforce per-tool timeouts and turn cancellation.
+func (m *MCPManager) ExecuteToolCtx(ctx context.Context, name string, args map[string]any) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if len(m.sessions) == 0 {
 		return "", fmt.Errorf("no MCP servers connected")
 	}
-	ctx := context.Background()
 	for _, s := range m.sessions {
 		res, err := s.CallTool(ctx, &mcp.CallToolParams{
 			Name:      name,

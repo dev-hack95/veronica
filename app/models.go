@@ -34,6 +34,7 @@ type Model struct {
 	width              int
 	mdRenderer         *glamour.TermRenderer
 	streamingReasoning string
+	streamingTools     string
 	streamingAnswer    string
 
 	ctx    context.Context

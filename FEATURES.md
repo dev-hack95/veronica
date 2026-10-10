@@ -4,4 +4,4 @@
 
 [ ] Format Code base in more managable and scalable way
 
-[ ] Integrate MCP servers with custom harness.
+[ ] Integrate MCP servers with custom harness. (design: assets/design/harness.md)

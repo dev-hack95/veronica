@@ -20,7 +20,7 @@ type ChatClient struct {
 	Url         string  `json:"url"`
 	Role        string  `json:"role"`
 	Stream      bool    `json:"stream"`
-	Tempreature float32 `json:"tempreature"`
+	Temperature float32 `json:"temperature"`
 	TopP        float32 `json:"top_p"`
 	MaxTokens   uint16  `json:"max_tokens"`
 }
@@ -49,6 +49,7 @@ type Response struct {
 type payload struct {
 	Model       string            `json:"model"`
 	Messages    []structs.Message `json:"messages"`
+	Tools       []structs.Tool    `json:"tools,omitempty"`
 	Temperature float64           `json:"temperature"`
 	MaxTokens   int               `json:"max_tokens"`
 	TopP        float64           `json:"top_p"`
@@ -74,7 +75,7 @@ func NewLlamaCppClient(config utilities.ClientConfig) *ChatClient {
 	return &ChatClient{
 		Model:       config.Model,
 		Url:         config.Url,
-		Tempreature: config.Tempreature,
+		Temperature: config.Temperature,
 		Stream:      config.Stream,
 		TopP:        config.TopP,
 		MaxTokens:   config.MaxTokens,
@@ -117,12 +118,13 @@ func (c *ChatClient) Ping() bool {
 	}
 }
 
-func (c *ChatClient) Chat(ctx context.Context, data []structs.Message) (*structs.ChatClientResponse, error) {
+func (c *ChatClient) Chat(ctx context.Context, data []structs.Message, tools []structs.Tool) (*structs.ChatClientResponse, error) {
 
 	chatpayload := &payload{
 		Model:       c.Model,
 		Messages:    data,
-		Temperature: float64(c.Tempreature),
+		Tools:       tools,
+		Temperature: float64(c.Temperature),
 		Stream:      c.Stream,
 		TopP:        float64(c.TopP),
 		MaxTokens:   int(c.MaxTokens),
@@ -166,11 +168,18 @@ func (c *ChatClient) Chat(ctx context.Context, data []structs.Message) (*structs
 	return &response, nil
 }
 
+type toolCallAcc struct {
+	id       string
+	name     string
+	args     string
+}
+
 func (c *ChatClient) HandleStream(resp *http.Response, callbacks *StreamCallbacks) (*structs.StreamResult, error) {
 	defer resp.Body.Close()
 	reader := bufio.NewReader(resp.Body)
 	var fullReasoning strings.Builder
 	var fullAnswer strings.Builder
+	var toolAccs []toolCallAcc
 	var result structs.StreamResult
 
 	for {
@@ -223,13 +232,18 @@ func (c *ChatClient) HandleStream(resp *http.Response, callbacks *StreamCallback
 				}
 			}
 
-			if choice.FinishReason != nil && *choice.FinishReason == "stop" {
+			for _, tc := range choice.Delta.ToolCalls {
+				for len(toolAccs) <= tc.Index {
+					toolAccs = append(toolAccs, toolCallAcc{})
+				}
+				toolAccs[tc.Index].id += tc.ID
+				toolAccs[tc.Index].name += tc.Function.Name
+				toolAccs[tc.Index].args += tc.Function.Arguments
+			}
+
+			if choice.FinishReason != nil && (*choice.FinishReason == "stop" || *choice.FinishReason == "tool_calls") {
 				if chunk.Timings != nil {
-					result.Timings = &struct {
-						TokensGenerated int
-						TimeMS          float64
-						TokensPerSecond float64
-					}{
+					result.Timings = &structs.Timings{
 						TokensGenerated: chunk.Timings.PredictedN,
 						TimeMS:          chunk.Timings.PredictedMS,
 						TokensPerSecond: chunk.Timings.PredictedPerSecond,
@@ -238,6 +252,16 @@ func (c *ChatClient) HandleStream(resp *http.Response, callbacks *StreamCallback
 				break
 			}
 		}
+	}
+
+	for _, a := range toolAccs {
+		if a.name == "" {
+			continue
+		}
+		tc := structs.ToolCall{ID: a.id, Type: "function"}
+		tc.Function.Name = a.name
+		tc.Function.Arguments = a.args
+		result.ToolCalls = append(result.ToolCalls, tc)
 	}
 
 	result.Reasoning = fullReasoning.String()
@@ -250,12 +274,13 @@ func (c *ChatClient) HandleStream(resp *http.Response, callbacks *StreamCallback
 	return &result, nil
 }
 
-func (c *ChatClient) StreamChatWithCallbacks(ctx context.Context, data []structs.Message, callbacks *StreamCallbacks) (*structs.StreamResult, error) {
+func (c *ChatClient) StreamChatWithCallbacks(ctx context.Context, data []structs.Message, tools []structs.Tool, callbacks *StreamCallbacks) (*structs.StreamResult, error) {
 
 	chatpayload := &payload{
 		Model:       c.Model,
 		Messages:    data,
-		Temperature: float64(c.Tempreature),
+		Tools:       tools,
+		Temperature: float64(c.Temperature),
 		Stream:      c.Stream,
 		TopP:        float64(c.TopP),
 		MaxTokens:   int(c.MaxTokens),

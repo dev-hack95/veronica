@@ -12,7 +12,7 @@ type ClientConfig struct {
 	Url         string  `json:"url"`
 	Role        string  `json:"role"`
 	Stream      bool    `json:"stream"`
-	Tempreature float32 `json:"tempreature"`
+	Temperature float32 `json:"temperature"`
 	TopP        float32 `json:"top_p"`
 	MaxTokens   uint16  `json:"max_tokens"`
 }
@@ -46,7 +46,7 @@ func CheckFileExist(filePath string) (ClientConfig, error) {
 			Role:        "user",
 			Stream:      true,
 			TopP:        0.7,
-			Tempreature: 0.8,
+			Temperature: 0.8,
 			MaxTokens:   32768,
 		}
 
@@ -73,6 +73,23 @@ func CheckFileExist(filePath string) (ClientConfig, error) {
 
 	if err != nil {
 		return data, err
+	}
+
+	// Older versions wrote a misspelled "tempreature" key (yaml.v3 lowercases
+	// untagged field names). Accept it when the corrected key is absent;
+	// prefer "temperature" when both are present.
+	var temps struct {
+		Temperature *float32 `yaml:"temperature"`
+		Tempreature *float32 `yaml:"tempreature"`
+	}
+	if err := yaml.Unmarshal(yamlFile, &temps); err != nil {
+		return data, err
+	}
+	switch {
+	case temps.Temperature != nil:
+		data.Temperature = *temps.Temperature
+	case temps.Tempreature != nil:
+		data.Temperature = *temps.Tempreature
 	}
 
 	return data, nil

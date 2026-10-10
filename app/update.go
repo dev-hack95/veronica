@@ -52,6 +52,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.message = append(m.message, infoStyle.Render("Request cancelled"))
 				m.streamingReasoning = ""
+				m.streamingTools = ""
 				m.streamingAnswer = ""
 				m.historyIdx = -1
 
@@ -108,11 +109,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.isProcessing = true
 			m.historyIdx = -1
 
-			if m.isStreaming {
-				return m, tea.Batch(m.promptResponseStream(m.memory), spinner.Tick)
-			} else {
-				return m, tea.Batch(m.prompResponse(m.memory), spinner.Tick)
-			}
+			return m, tea.Batch(m.runHarness(m.memory), spinner.Tick)
 
 		case tea.KeyUp:
 			if len(m.prompts) > 0 {
@@ -151,7 +148,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-	case structs.StreamChunkMsg:
+	case structs.HarnessChunkMsg:
 		if !m.isProcessing {
 			return m, nil
 		}
@@ -161,53 +158,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewPort.SetContent(m.updateViewportContent())
 			return m, m.textInput.Focus()
 		}
-		m.streamingReasoning, m.streamingAnswer = msg.ReasoningChunk, msg.AnswerChunk
+		m.streamingReasoning, m.streamingTools, m.streamingAnswer = msg.Reasoning, msg.ToolBlocks, msg.Answer
 		m.viewPort.SetContent(m.updateViewportContent())
 		m.viewPort.GotoBottom()
 
 		if msg.IsComplete {
 			m.isProcessing = false
-			final := m.formatAssistantBlock(m.streamingReasoning, m.streamingAnswer)
+			final := m.formatAssistantBlock(m.streamingReasoning, m.streamingTools, m.streamingAnswer)
 			m.message = append(m.message, final)
-			m.memory = append(m.memory, structs.Message{Role: "assistant", Content: m.streamingAnswer})
-			m.streamingReasoning, m.streamingAnswer = "", ""
+			m.memory = append(m.memory, msg.NewMessages...)
+			if msg.Timings != nil {
+				m.message = append(m.message, infoStyle.Render(fmt.Sprintf("(Completed in %.0fms)", msg.Timings.TimeMS)))
+			}
+			m.streamingReasoning, m.streamingTools, m.streamingAnswer = "", "", ""
 			m.textInput.Focus()
 		}
-		return m, nil
-
-	case structs.ChatResponse:
-		if !m.isProcessing {
-			return m, nil
-		}
-		m.isProcessing = false
-		var content string
-		if msg.Err != nil {
-			m.err = msg.Err
-			content = errorStyle.Render(m.err.Error())
-		} else {
-			var message structs.Message
-			message.Role = msg.Content.Choices[0].Message.Role
-			message.Content = msg.Content.Choices[0].Message.Content
-			m.memory = append(m.memory, message)
-
-			header := headerStyle.Render("Assistant: ")
-			var fullContent strings.Builder
-			if msg.Content.Choices[0].Message.ReasoningContent != "" {
-				reasoningHeader := thinkingStyle.Render("--- Thinking ---")
-				answerHeader := thinkingStyle.Render("--- Answer ---")
-				renderedReasoning := m.renderMarkdown(msg.Content.Choices[0].Message.ReasoningContent)
-				fullContent.WriteString(reasoningHeader + "\n" + thinkingStyle.Render(renderedReasoning) + "\n\n" + answerHeader + "\n")
-			}
-			renderedContent := m.renderMarkdown(msg.Content.Choices[0].Message.Content)
-			fullContent.WriteString(renderedContent)
-
-			timeInfo := infoStyle.Render(fmt.Sprintf("(Completed in %v)", msg.Elapsed))
-			content = fmt.Sprintf("%s\n%s\n%s", header, fullContent.String(), timeInfo)
-		}
-		m.message = append(m.message, content)
-		m.viewPort.SetContent(m.updateViewportContent())
-		m.viewPort.GotoBottom()
-		m.textInput.Focus()
 		return m, nil
 
 	case spinner.TickMsg:
