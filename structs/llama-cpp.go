@@ -3,7 +3,6 @@ package structs
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"sync"
 	"time"
 )
@@ -146,12 +145,39 @@ type ChatResponse struct {
 	Elapsed time.Duration
 }
 
+// SegmentKind is the kind of one ordered piece of assistant output.
+type SegmentKind string
+
+const (
+	SegmentReasoning SegmentKind = "reasoning"
+	SegmentTool      SegmentKind = "tool"
+	SegmentAnswer    SegmentKind = "answer"
+)
+
+// ToolBlock is one MCP tool call: what was requested, how long it took, and
+// (when expanded) what it returned.
+type ToolBlock struct {
+	Name    string
+	Args    string
+	Running bool
+	Elapsed time.Duration
+	Output  string
+	Err     string
+}
+
+// Segment is one piece of assistant output for the turn, kept in
+// chronological order: reasoning text, a tool call block, or answer text.
+type Segment struct {
+	Kind SegmentKind
+	Text string // reasoning or answer text
+	Tool *ToolBlock
+}
+
 // HarnessChunkMsg is emitted by the harness poller with the accumulated state
-// of the current turn (reasoning, rendered tool activity, answer).
+// of the current turn (ordered output segments, active tool, timings).
 type HarnessChunkMsg struct {
-	Reasoning    string
-	ToolBlocks   string
-	Answer       string
+	Segments     []Segment
+	ActiveTool   string
 	IsComplete   bool
 	LimitReached bool
 	Timings      *Timings
@@ -165,13 +191,71 @@ type HarnessChunkMsg struct {
 // harness goroutine writes into it; the poller reads snapshots.
 type HarnessState struct {
 	Mu           sync.Mutex
-	Reasoning    strings.Builder
-	ToolBlocks   strings.Builder
-	Answer       strings.Builder
+	Segments     []Segment
 	Done         bool
 	LimitReached bool
 	Err          error
 	Timings      *Timings
 	NewMessages  []Message
 	Ctx          context.Context
+}
+
+// AppendText appends a streamed chunk to the last segment of the same kind,
+// or starts a new segment.
+func (s *HarnessState) AppendText(kind SegmentKind, chunk string) {
+	if chunk == "" {
+		return
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if n := len(s.Segments); n > 0 && s.Segments[n-1].Kind == kind {
+		s.Segments[n-1].Text += chunk
+		return
+	}
+	s.Segments = append(s.Segments, Segment{Kind: kind, Text: chunk})
+}
+
+// AppendTool starts a new running tool segment and returns its index.
+func (s *HarnessState) AppendTool(name, args string) int {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	idx := len(s.Segments)
+	s.Segments = append(s.Segments, Segment{Kind: SegmentTool, Tool: &ToolBlock{Name: name, Args: args, Running: true}})
+	return idx
+}
+
+// FinishTool marks a tool segment complete with its result.
+func (s *HarnessState) FinishTool(idx int, elapsed time.Duration, output string, err error) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if idx < 0 || idx >= len(s.Segments) || s.Segments[idx].Tool == nil {
+		return
+	}
+	t := s.Segments[idx].Tool
+	t.Running = false
+	t.Elapsed = elapsed
+	if err != nil {
+		t.Err = err.Error()
+	} else {
+		t.Output = output
+	}
+}
+
+// Snapshot returns a deep copy of the segments plus the name of the tool
+// currently running ("" if none).
+func (s *HarnessState) Snapshot() (segments []Segment, activeTool string) {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	segments = make([]Segment, len(s.Segments))
+	for i, seg := range s.Segments {
+		if seg.Tool != nil {
+			t := *seg.Tool
+			seg.Tool = &t
+			if t.Running {
+				activeTool = t.Name
+			}
+		}
+		segments[i] = seg
+	}
+	return segments, activeTool
 }

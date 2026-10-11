@@ -16,13 +16,28 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// viewEntry is one block in the viewport conversation: a pre-rendered raw
+// line (prompt, notice) or an assistant turn kept as ordered segments so it
+// can be re-rendered (e.g. when tool output is expanded with Ctrl+O).
+type viewEntry struct {
+	kind     string
+text     string          // raw entries
+	segments []structs.Segment // assistant entries
+	limit    bool          // iteration limit reached (assistant entries)
+}
+
+const (
+	entryRaw       = "raw"
+	entryAssistant = "assistant"
+)
+
 type Model struct {
 	textInput          textinput.Model
 	viewPort           viewport.Model
 	spinner            spinner.Model
 	client             *client.ChatClient
 	memory             []structs.Message
-	message            []string
+	entries            []viewEntry
 	prompts            []string
 	isProcessing       bool
 	isStreaming        bool
@@ -33,9 +48,10 @@ type Model struct {
 	height             int
 	width              int
 	mdRenderer         *glamour.TermRenderer
-	streamingReasoning string
-	streamingTools     string
-	streamingAnswer    string
+	streamingSegments  []structs.Segment
+	activeTool         string
+	harnessState       *structs.HarnessState
+	showFullToolOutput bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -84,7 +100,7 @@ func InitModel() *Model {
 		spinner:       sp,
 		client:        client.NewLlamaCppClient(config),
 		memory:        []structs.Message{},
-		message:       []string{},
+		entries:       []viewEntry{},
 		isProcessing:  false,
 		isStreaming:   true,
 		ready:         false,

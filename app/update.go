@@ -39,6 +39,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Type == tea.KeyCtrlC {
 				return m, tea.Quit
 			}
+			if msg.Type == tea.KeyCtrlO {
+				m.showFullToolOutput = !m.showFullToolOutput
+				m.viewPort.SetContent(m.updateViewportContent())
+				return m, nil
+			}
 			if msg.Type == tea.KeyEsc {
 				m.cancel()
 				m.ctx, m.cancel = context.WithCancel(context.Background())
@@ -47,13 +52,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.memory) > 0 {
 					m.memory = m.memory[:len(m.memory)-1]
 				}
-				if len(m.message) > 0 {
-					m.message = m.message[:len(m.message)-1]
+				if len(m.entries) > 0 {
+					m.entries = m.entries[:len(m.entries)-1]
 				}
-				m.message = append(m.message, infoStyle.Render("Request cancelled"))
-				m.streamingReasoning = ""
-				m.streamingTools = ""
-				m.streamingAnswer = ""
+				m.entries = append(m.entries, viewEntry{kind: entryRaw, text: infoStyle.Render("Request cancelled")})
+				m.streamingSegments = nil
+				m.activeTool = ""
 				m.historyIdx = -1
 
 				m.viewPort.SetContent(m.updateViewportContent())
@@ -74,13 +78,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				path := m.mcpInput.Value()
 				if path != "" {
 					if err := m.mcpManager.AddPath(path); err == nil {
-						m.message = append(m.message, infoStyle.Render(fmt.Sprintf("MCP Server added: %s", path)))
+						m.entries = append(m.entries, viewEntry{kind: entryRaw, text: infoStyle.Render(fmt.Sprintf("MCP Server added: %s", path))})
 						m.viewPort.SetContent(m.updateViewportContent())
 						m.isMCPFormOpen = false
 						m.textInput.Focus()
 						return m, nil
 					} else {
-						m.message = append(m.message, errorStyle.Render(fmt.Sprintf("Error adding path: %v", err)))
+						m.entries = append(m.entries, viewEntry{kind: entryRaw, text: errorStyle.Render(fmt.Sprintf("Error adding path: %v", err))})
 						m.viewPort.SetContent(m.updateViewportContent())
 					}
 				}
@@ -100,7 +104,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.runCmd(prompt)
 			}
 
-			m.message = append(m.message, propmtStyle.Render(fmt.Sprintf("> %s", prompt)))
+			m.entries = append(m.entries, viewEntry{kind: entryRaw, text: propmtStyle.Render(fmt.Sprintf("> %s", prompt))})
 			m.prompts = append(m.prompts, prompt)
 			m.memory = append(m.memory, structs.Message{Role: "user", Content: prompt})
 
@@ -133,6 +137,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case tea.KeyCtrlO:
+			m.showFullToolOutput = !m.showFullToolOutput
+			m.viewPort.SetContent(m.updateViewportContent())
+			return m, nil
+
 		case tea.KeyCtrlA:
 			m.isMCPFormOpen = !m.isMCPFormOpen
 			if m.isMCPFormOpen {
@@ -149,31 +158,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case structs.HarnessChunkMsg:
-		if !m.isProcessing {
+		// Stale polls (e.g. after Esc cancel or /new) are dropped.
+		if !m.isProcessing || m.harnessState == nil {
 			return m, nil
 		}
 		if msg.Err != nil {
 			m.isProcessing = false
-			m.message = append(m.message, errorStyle.Render(msg.Err.Error()))
+			m.harnessState = nil
+			m.entries = append(m.entries, viewEntry{kind: entryRaw, text: errorStyle.Render(msg.Err.Error())})
 			m.viewPort.SetContent(m.updateViewportContent())
 			return m, m.textInput.Focus()
 		}
-		m.streamingReasoning, m.streamingTools, m.streamingAnswer = msg.Reasoning, msg.ToolBlocks, msg.Answer
+		m.streamingSegments = msg.Segments
+		m.activeTool = msg.ActiveTool
 		m.viewPort.SetContent(m.updateViewportContent())
 		m.viewPort.GotoBottom()
 
 		if msg.IsComplete {
 			m.isProcessing = false
-			final := m.formatAssistantBlock(m.streamingReasoning, m.streamingTools, m.streamingAnswer)
-			m.message = append(m.message, final)
+			m.harnessState = nil
+			m.entries = append(m.entries, viewEntry{kind: entryAssistant, segments: msg.Segments, limit: msg.LimitReached})
 			m.memory = append(m.memory, msg.NewMessages...)
 			if msg.Timings != nil {
-				m.message = append(m.message, infoStyle.Render(fmt.Sprintf("(Completed in %.0fms)", msg.Timings.TimeMS)))
+				m.entries = append(m.entries, viewEntry{kind: entryRaw, text: infoStyle.Render(fmt.Sprintf("(Completed in %.0fms)", msg.Timings.TimeMS))})
 			}
-			m.streamingReasoning, m.streamingTools, m.streamingAnswer = "", "", ""
-			m.textInput.Focus()
+			m.streamingSegments = nil
+			m.activeTool = ""
+			return m, m.textInput.Focus()
 		}
-		return m, nil
+
+		// Not done yet: re-schedule the poll so streaming keeps rendering.
+		return m, m.pollHarnessState(m.harnessState)
 
 	case spinner.TickMsg:
 		if m.isProcessing {
