@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"veronica/structs"
 
@@ -10,7 +11,16 @@ import (
 func (m *Model) runCmd(cmd string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "/new":
-		m.isProcessing = false
+		if m.isProcessing {
+			// Stop the in-flight harness turn before wiping state.
+			m.cancel()
+			m.ctx, m.cancel = context.WithCancel(context.Background())
+			m.isProcessing = false
+		}
+		m.harnessState = nil
+		m.streamingSegments = nil
+		m.activeTool = ""
+		m.cursorVisible = false
 		m.textInput.Focus()
 		m.entries = []viewEntry{}
 		m.memory = []structs.Message{}
@@ -47,7 +57,7 @@ func (m *Model) runCmd(cmd string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/bye":
-		return m, tea.Quit
+		return m, m.quit()
 
 	default:
 		return m, nil

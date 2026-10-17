@@ -1,3 +1,5 @@
+// Package app implements Veronica's Bubble Tea TUI: model state, key
+// handling, the MCP tool-calling harness, and rendering.
 package app
 
 import (
@@ -21,9 +23,9 @@ import (
 // can be re-rendered (e.g. when tool output is expanded with Ctrl+O).
 type viewEntry struct {
 	kind     string
-text     string          // raw entries
+	text     string            // raw entries
 	segments []structs.Segment // assistant entries
-	limit    bool          // iteration limit reached (assistant entries)
+	limit    bool              // iteration limit reached (assistant entries)
 }
 
 const (
@@ -44,7 +46,6 @@ type Model struct {
 	ready              bool
 	historyIdx         int
 	currentPrompt      string
-	err                error
 	height             int
 	width              int
 	mdRenderer         *glamour.TermRenderer
@@ -52,6 +53,8 @@ type Model struct {
 	activeTool         string
 	harnessState       *structs.HarnessState
 	showFullToolOutput bool
+	showThinking       bool
+	cursorVisible      bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -91,6 +94,14 @@ func InitModel() *Model {
 	mcpManager := utilities.NewMCPManager()
 	mcpManager.InitializeServers()
 
+	chatClient := client.NewLlamaCppClient(config)
+	entries := []viewEntry{}
+	if chatClient.Ping() {
+		entries = append(entries, viewEntry{kind: entryRaw, text: infoStyle.Render(fmt.Sprintf("Connected to %s", config.URL))})
+	} else {
+		entries = append(entries, viewEntry{kind: entryRaw, text: errorStyle.Render(fmt.Sprintf("LLM server not reachable at %s", config.URL))})
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Model{
@@ -98,9 +109,9 @@ func InitModel() *Model {
 		mcpInput:      mcpTi,
 		mcpManager:    mcpManager,
 		spinner:       sp,
-		client:        client.NewLlamaCppClient(config),
+		client:        chatClient,
 		memory:        []structs.Message{},
-		entries:       []viewEntry{},
+		entries:       entries,
 		isProcessing:  false,
 		isStreaming:   true,
 		ready:         false,

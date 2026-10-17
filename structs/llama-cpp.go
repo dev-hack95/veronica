@@ -1,25 +1,14 @@
+// Package structs defines the shared API types and Bubble Tea message
+// types used across Veronica.
 package structs
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 )
 
-type Client struct {
-	Url string `json:"url"`
-}
-
-type Request struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
-	Options  struct {
-		Temperature float64 `json:"temperature"`
-	} `json:"options"`
-}
-
+// Message is one chat message in the conversation sent to the LLM.
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
@@ -28,8 +17,8 @@ type Message struct {
 }
 
 type ToolCall struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
 	Function struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
@@ -56,11 +45,6 @@ type Tool struct {
 		Description string `json:"description,omitempty"`
 		Parameters  any    `json:"parameters"`
 	} `json:"function"`
-}
-
-type SessionData struct {
-	Query   string          `json:"query"`
-	Respone json.RawMessage `json:"response"`
 }
 
 type ChatClientResponse struct {
@@ -137,12 +121,6 @@ type StreamResult struct {
 	Answer    string
 	ToolCalls []ToolCall
 	Timings   *Timings
-}
-
-type ChatResponse struct {
-	Content ChatClientResponse
-	Err     error
-	Elapsed time.Duration
 }
 
 // SegmentKind is the kind of one ordered piece of assistant output.

@@ -1,3 +1,5 @@
+// Package prompts provides the markdown system prompt prepended to every
+// conversation turn.
 package prompts
 
 func GetMarkdownSystemPrompt() string {

@@ -1,3 +1,5 @@
+// Package utilities loads Veronica's runtime config (~/.veronica) and
+// manages MCP server connections.
 package utilities
 
 import (
@@ -9,12 +11,12 @@ import (
 
 type ClientConfig struct {
 	Model       string  `json:"model"`
-	Url         string  `json:"url"`
+	URL         string  `json:"url"`
 	Role        string  `json:"role"`
 	Stream      bool    `json:"stream"`
 	Temperature float32 `json:"temperature"`
 	TopP        float32 `json:"top_p"`
-	MaxTokens   uint16  `json:"max_tokens"`
+	MaxTokens   int     `json:"max_tokens"`
 }
 
 func CheckFileExist(filePath string) (ClientConfig, error) {
@@ -38,11 +40,11 @@ func CheckFileExist(filePath string) (ClientConfig, error) {
 			return data, err2
 		}
 
-		file_path := filepath.Join(dirPath, "model.yaml")
+		filePath := filepath.Join(dirPath, "model.yaml")
 
 		clientConfig := ClientConfig{
 			Model:       "default",
-			Url:         "http://localhost:8080",
+			URL:         "http://localhost:8080",
 			Role:        "user",
 			Stream:      true,
 			TopP:        0.7,
@@ -56,7 +58,7 @@ func CheckFileExist(filePath string) (ClientConfig, error) {
 			return data, err3
 		}
 
-		err4 := os.WriteFile(file_path, yamlData, 0755)
+		err4 := os.WriteFile(filePath, yamlData, 0755)
 
 		if err4 != nil {
 			return data, err4

@@ -1,3 +1,5 @@
+// Package client wraps the llama.cpp OpenAI-compatible
+// /v1/chat/completions API (blocking and SSE streaming).
 package client
 
 import (
@@ -6,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -17,12 +20,12 @@ import (
 
 type ChatClient struct {
 	Model       string  `json:"model"`
-	Url         string  `json:"url"`
+	URL         string  `json:"url"`
 	Role        string  `json:"role"`
 	Stream      bool    `json:"stream"`
 	Temperature float32 `json:"temperature"`
 	TopP        float32 `json:"top_p"`
-	MaxTokens   uint16  `json:"max_tokens"`
+	MaxTokens   int     `json:"max_tokens"`
 }
 
 type Choices struct {
@@ -56,15 +59,6 @@ type payload struct {
 	Stream      bool              `json:"stream"`
 }
 
-type Section struct {
-	Title   string `json:"title"`
-	Content string `json:"content"`
-}
-
-type Document struct {
-	Sections []Section `json:"sections"`
-}
-
 type StreamCallbacks struct {
 	OnReasoningChunk func(chunk string)
 	OnAnswerChunk    func(chunk string)
@@ -74,7 +68,7 @@ type StreamCallbacks struct {
 func NewLlamaCppClient(config utilities.ClientConfig) *ChatClient {
 	return &ChatClient{
 		Model:       config.Model,
-		Url:         config.Url,
+		URL:         config.URL,
 		Temperature: config.Temperature,
 		Stream:      config.Stream,
 		TopP:        config.TopP,
@@ -89,7 +83,7 @@ func (c *ChatClient) Ping() bool {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	host, port, err := net.SplitHostPort(strings.TrimPrefix(c.Url, "http://"))
+	host, port, err := net.SplitHostPort(strings.TrimPrefix(c.URL, "http://"))
 
 	if err != nil {
 		return false
@@ -127,7 +121,7 @@ func (c *ChatClient) Chat(ctx context.Context, data []structs.Message, tools []s
 		Temperature: float64(c.Temperature),
 		Stream:      c.Stream,
 		TopP:        float64(c.TopP),
-		MaxTokens:   int(c.MaxTokens),
+		MaxTokens:   c.MaxTokens,
 	}
 
 	buff, err := json.Marshal(chatpayload)
@@ -137,7 +131,7 @@ func (c *ChatClient) Chat(ctx context.Context, data []structs.Message, tools []s
 	}
 
 	httpClient := &http.Client{}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Url+"/v1/chat/completions", bytes.NewReader(buff))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/chat/completions", bytes.NewReader(buff))
 
 	if err != nil {
 		return nil, err
@@ -157,6 +151,10 @@ func (c *ChatClient) Chat(ctx context.Context, data []structs.Message, tools []s
 		return nil, err
 	}
 
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status: %s", res.Status)
+	}
+
 	var response structs.ChatClientResponse
 
 	err = json.Unmarshal(body, &response)
@@ -165,13 +163,17 @@ func (c *ChatClient) Chat(ctx context.Context, data []structs.Message, tools []s
 		return nil, err
 	}
 
+	if len(response.Choices) == 0 {
+		return nil, errors.New("no choices in response")
+	}
+
 	return &response, nil
 }
 
 type toolCallAcc struct {
-	id       string
-	name     string
-	args     string
+	id   string
+	name string
+	args string
 }
 
 func (c *ChatClient) HandleStream(resp *http.Response, callbacks *StreamCallbacks) (*structs.StreamResult, error) {
@@ -283,7 +285,7 @@ func (c *ChatClient) StreamChatWithCallbacks(ctx context.Context, data []structs
 		Temperature: float64(c.Temperature),
 		Stream:      c.Stream,
 		TopP:        float64(c.TopP),
-		MaxTokens:   int(c.MaxTokens),
+		MaxTokens:   c.MaxTokens,
 	}
 
 	payloadBytes, err := json.Marshal(chatpayload)
@@ -291,7 +293,7 @@ func (c *ChatClient) StreamChatWithCallbacks(ctx context.Context, data []structs
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.Url+"/v1/chat/completions", bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.URL+"/v1/chat/completions", bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return nil, err
 	}

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"veronica/structs"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -12,7 +14,6 @@ const footerHeight = 2
 
 var (
 	propmtStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	headerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	infoStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	thinkingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
@@ -26,11 +27,7 @@ func (m *Model) View() string {
 	var s strings.Builder
 	s.WriteString(m.viewPort.View() + "\n\n")
 	if m.isProcessing {
-		footer := "Processing..."
-		if m.activeTool != "" {
-			footer = fmt.Sprintf("Running %s...", m.activeTool)
-		}
-		s.WriteString(m.spinner.View() + " " + footer + " (esc: cancel)\n")
+		s.WriteString(m.spinner.View() + " " + m.phaseLabel() + " (esc: cancel)\n")
 	} else {
 		modeName := "Standard"
 		if m.isStreaming {
@@ -48,7 +45,26 @@ func (m *Model) View() string {
 		if m.showFullToolOutput {
 			toolHint = "hide tool output"
 		}
-		s.WriteString(infoStyle.Render(fmt.Sprintf("(↑/↓: history, Ctrl+A: MCP Config, Ctrl+O: %s, /stream: toggle, ctrl+c: quit)", toolHint)))
+		thinkHint := "show thinking"
+		if m.showThinking {
+			thinkHint = "hide thinking"
+		}
+		s.WriteString(infoStyle.Render(fmt.Sprintf("(↑/↓: history, Ctrl+A: MCP Config, Ctrl+O: %s, Ctrl+T: %s, /stream: toggle, ctrl+c: quit)", toolHint, thinkHint)))
 	}
 	return s.String()
+}
+
+// phaseLabel describes what the harness is doing right now for the footer:
+// a running tool, active reasoning ("Thinking..."), or answer generation.
+func (m *Model) phaseLabel() string {
+	if m.activeTool != "" {
+		return fmt.Sprintf("Running %s...", m.activeTool)
+	}
+	if n := len(m.streamingSegments); n > 0 {
+		if m.streamingSegments[n-1].Kind == structs.SegmentReasoning {
+			return "Thinking..."
+		}
+		return "Generating..."
+	}
+	return "Processing..."
 }

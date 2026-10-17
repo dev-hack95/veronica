@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"veronica/structs"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -37,10 +38,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.isProcessing {
 			if msg.Type == tea.KeyCtrlC {
-				return m, tea.Quit
+				return m, m.quit()
 			}
 			if msg.Type == tea.KeyCtrlO {
 				m.showFullToolOutput = !m.showFullToolOutput
+				m.viewPort.SetContent(m.updateViewportContent())
+				return m, nil
+			}
+			if msg.Type == tea.KeyCtrlT {
+				m.showThinking = !m.showThinking
 				m.viewPort.SetContent(m.updateViewportContent())
 				return m, nil
 			}
@@ -58,6 +64,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.entries = append(m.entries, viewEntry{kind: entryRaw, text: infoStyle.Render("Request cancelled")})
 				m.streamingSegments = nil
 				m.activeTool = ""
+				m.cursorVisible = false
 				m.historyIdx = -1
 
 				m.viewPort.SetContent(m.updateViewportContent())
@@ -113,7 +120,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.isProcessing = true
 			m.historyIdx = -1
 
-			return m, tea.Batch(m.runHarness(m.memory), spinner.Tick)
+			return m, tea.Batch(m.runHarness(m.memory), spinner.Tick, cursorBlink())
 
 		case tea.KeyUp:
 			if len(m.prompts) > 0 {
@@ -142,6 +149,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewPort.SetContent(m.updateViewportContent())
 			return m, nil
 
+		case tea.KeyCtrlT:
+			m.showThinking = !m.showThinking
+			m.viewPort.SetContent(m.updateViewportContent())
+			return m, nil
+
 		case tea.KeyCtrlA:
 			m.isMCPFormOpen = !m.isMCPFormOpen
 			if m.isMCPFormOpen {
@@ -154,7 +166,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyCtrlC:
-			return m, tea.Quit
+			return m, m.quit()
 		}
 
 	case structs.HarnessChunkMsg:
@@ -184,6 +196,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.streamingSegments = nil
 			m.activeTool = ""
+			m.cursorVisible = false
 			return m, m.textInput.Focus()
 		}
 
@@ -195,6 +208,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
 		}
+
+	case cursorBlinkMsg:
+		if !m.isProcessing {
+			return m, nil
+		}
+		m.cursorVisible = !m.cursorVisible
+		m.viewPort.SetContent(m.updateViewportContent())
+		return m, cursorBlink()
 	}
 
 	if !m.isProcessing {
@@ -206,4 +227,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// cursorBlinkMsg toggles the streaming cursor's visibility.
+type cursorBlinkMsg struct{}
+
+// cursorBlink reschedules itself every 500ms while a turn is in flight,
+// driving the blink of the live output cursor.
+func cursorBlink() tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(500 * time.Millisecond)
+		return cursorBlinkMsg{}
+	}
+}
+
+// quit closes all MCP sessions and exits the program. It runs as a tea.Cmd
+// so the cleanup happens before the program handles the QuitMsg.
+func (m *Model) quit() tea.Cmd {
+	return func() tea.Msg {
+		m.mcpManager.CloseAll()
+		return tea.QuitMsg{}
+	}
 }

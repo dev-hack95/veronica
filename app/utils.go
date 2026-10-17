@@ -23,23 +23,35 @@ func (m *Model) renderMarkdown(content string) string {
 
 // formatAssistantBlock renders one assistant turn from its chronologically
 // ordered segments: reasoning, tool call blocks, and answer text appear in
-// the order they happened, not grouped by kind.
-func (m *Model) formatAssistantBlock(segments []structs.Segment, limitReached bool) string {
-	header := headerStyle.Render("Assistant: ")
+// the order they happened, not grouped by kind. Reasoning is hidden unless
+// m.showThinking is set (Ctrl+T). When live, the in-flight reasoning header
+// carries the animated spinner.
+func (m *Model) formatAssistantBlock(segments []structs.Segment, limitReached bool, live bool) string {
 	var fullContent strings.Builder
 
 	seenThinking := false
 	seenTool := false
 	seenAnswer := false
 
-	for _, seg := range segments {
+	for i, seg := range segments {
 		switch seg.Kind {
 		case structs.SegmentReasoning:
+			if !m.showThinking {
+				continue
+			}
 			if !seenThinking {
-				fullContent.WriteString(thinkingStyle.Render("--- Thinking ---") + "\n")
+				thinkingHeader := "--- Thinking ---"
+				if live && i == len(segments)-1 {
+					thinkingHeader = m.spinner.View() + " Thinking..."
+				}
+				fullContent.WriteString(thinkingStyle.Render(thinkingHeader) + "\n")
 				seenThinking = true
 			}
-			fullContent.WriteString(thinkingStyle.Render(m.renderMarkdown(seg.Text)) + "\n\n")
+			text := m.renderMarkdown(seg.Text)
+			if m.liveCursor(live, i == len(segments)-1) {
+				text += "█"
+			}
+			fullContent.WriteString(thinkingStyle.Render(text) + "\n\n")
 		case structs.SegmentTool:
 			fullContent.WriteString(m.renderToolBlock(seg.Tool))
 			seenTool = true
@@ -50,7 +62,11 @@ func (m *Model) formatAssistantBlock(segments []structs.Segment, limitReached bo
 				}
 				seenAnswer = true
 			}
-			fullContent.WriteString(m.renderMarkdown(seg.Text) + "\n\n")
+			text := m.renderMarkdown(seg.Text)
+			if m.liveCursor(live, i == len(segments)-1) {
+				text += "█"
+			}
+			fullContent.WriteString(text + "\n\n")
 		}
 	}
 
@@ -58,7 +74,14 @@ func (m *Model) formatAssistantBlock(segments []structs.Segment, limitReached bo
 		fullContent.WriteString(errorStyle.Render("Iteration limit reached") + "\n")
 	}
 
-	return fmt.Sprintf("%s\n%s", header, fullContent.String())
+	return fullContent.String()
+}
+
+// liveCursor reports whether the blinking block cursor should be appended
+// after this segment: only on the live trailing text segment, and only
+// while the blink is lit. Committed turns and tool blocks never carry it.
+func (m *Model) liveCursor(live, isLast bool) bool {
+	return live && isLast && m.cursorVisible
 }
 
 // renderToolBlock renders one tool call. Collapsed by default (args + status
@@ -71,7 +94,7 @@ func (m *Model) renderToolBlock(t *structs.ToolBlock) string {
 		if len(args) > maxArgsDisplay {
 			args = args[:maxArgsDisplay] + "…"
 		}
-		b.WriteString(infoStyle.Render("   args: " + args) + "\n")
+		b.WriteString(infoStyle.Render("   args: "+args) + "\n")
 	}
 	switch {
 	case t.Running:
@@ -102,13 +125,13 @@ func (m *Model) updateViewportContent() string {
 	parts := make([]string, 0, len(m.entries)+1)
 	for _, e := range m.entries {
 		if e.kind == entryAssistant {
-			parts = append(parts, m.formatAssistantBlock(e.segments, e.limit))
+			parts = append(parts, m.formatAssistantBlock(e.segments, e.limit, false))
 		} else {
 			parts = append(parts, e.text)
 		}
 	}
 	if m.isProcessing && len(m.streamingSegments) > 0 {
-		parts = append(parts, m.formatAssistantBlock(m.streamingSegments, false))
+		parts = append(parts, m.formatAssistantBlock(m.streamingSegments, false, true))
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -134,12 +157,11 @@ func (m *Model) getAllToolsFormatted() string {
 }
 
 func (m *Model) getMCPStatus() string {
-	count := m.mcpManager.GetServerCount()
-
-	if count == 0 {
+	if !m.mcpManager.IsConnected() {
 		return errorStyle.Render("❌ No MCP servers connected")
 	}
 
+	count := m.mcpManager.GetServerCount()
 	paths := m.mcpManager.ListPaths()
 
 	var b strings.Builder

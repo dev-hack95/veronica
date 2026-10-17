@@ -78,25 +78,6 @@ func (m *MCPManager) AddPath(path string) error {
 	return m.saveConfig()
 }
 
-func (m *MCPManager) RemovePath(path string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var newPaths []string
-	found := false
-	for _, p := range m.paths {
-		if p == path {
-			found = true
-			continue
-		}
-		newPaths = append(newPaths, p)
-	}
-	if !found {
-		return fmt.Errorf("path not found: %s", path)
-	}
-	m.paths = newPaths
-	return m.saveConfig()
-}
-
 func (m *MCPManager) saveConfig() error {
 	m.config = PathConfig{Servers: m.paths}
 	data, err := json.MarshalIndent(m.config, "", "  ")
@@ -238,13 +219,21 @@ func (m *MCPManager) ExecuteTool(name string, args map[string]any) (string, erro
 
 // ExecuteToolCtx runs a tool with the caller's context so the harness can
 // enforce per-tool timeouts and turn cancellation.
+// ExecuteToolCtx runs a tool with the caller's context so the harness can
+// enforce per-tool timeouts and turn cancellation. The session list is
+// snapshotted under the lock; the call itself runs without holding it so a
+// long-running tool does not block config changes.
 func (m *MCPManager) ExecuteToolCtx(ctx context.Context, name string, args map[string]any) (string, error) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	if len(m.sessions) == 0 {
+		m.mu.RUnlock()
 		return "", fmt.Errorf("no MCP servers connected")
 	}
-	for _, s := range m.sessions {
+	sessions := make([]*mcp.ClientSession, len(m.sessions))
+	copy(sessions, m.sessions)
+	m.mu.RUnlock()
+
+	for _, s := range sessions {
 		res, err := s.CallTool(ctx, &mcp.CallToolParams{
 			Name:      name,
 			Arguments: args,
